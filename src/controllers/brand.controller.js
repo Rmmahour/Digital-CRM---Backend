@@ -26,7 +26,8 @@ export const getAllBrands = async (req, res, next) => {
           },
         },
       },
-      orderBy: { createdAt: "desc" },
+      // orderBy: { createdAt: "desc" },
+      orderBy: { order: "asc" },
     })
 
     res.json(brands)
@@ -191,6 +192,34 @@ export const deleteBrand = async (req, res, next) => {
 
     res.json({ message: "Brand moved to trash. Will be permanently deleted in 14 days." })
   } catch (error) {
+    next(error)
+  }
+}
+
+// backend/controllers/brands.controller.js
+export const reorderBrands = async (req, res, next) => {
+  console.log("HIT REORDER CONTROLLER"); // 👈 Check your terminal when you drag items
+  console.log("Payload:", req.body.items);
+  try {
+    const { items } = req.body // Expecting array: [{ id: "abc", order: 0 }, { id: "xyz", order: 1 }]
+
+    if (!items || !Array.isArray(items)) {
+      return res.status(400).json({ message: "Items array is required" })
+    }
+
+    // Run all updates in a single transaction for safety
+    await prisma.$transaction(
+      items.map((item) =>
+        prisma.brand.update({
+          where: { id: item.id },
+          data: { order: item.order },
+        })
+      )
+    )
+
+    res.json({ message: "Order updated successfully" })
+  } catch (error) {
+    console.error("Reorder Error:", error);
     next(error)
   }
 }

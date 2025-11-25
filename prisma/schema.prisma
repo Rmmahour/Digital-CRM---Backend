@@ -47,6 +47,7 @@ enum ContentType {
   VIDEO
   STORY
   REEL
+  POLL
   CAROUSEL
   BLOG_POST
   OTHER
@@ -186,6 +187,8 @@ model Brand {
   deletedBy   String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  order     Int      @default(0)
 
   // Relations
   tasks       Task[]

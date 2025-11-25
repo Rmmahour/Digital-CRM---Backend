@@ -3,32 +3,43 @@ import { format } from "date-fns"
 
 // Helper function to get random weekday dates excluding Saturday and Sunday
 const getRandomWeekdayDates = (startDate, endDate, count) => {
-  const dates = []
   const start = new Date(startDate)
   const end = new Date(endDate)
-
-  // Get all weekdays in the range (Monday=1 to Friday=5)
   const weekdays = []
   const current = new Date(start)
 
   while (current <= end) {
     const day = current.getDay()
-    // 0 = Sunday, 6 = Saturday - exclude both
+    // Exclude Sunday(0) and Saturday(6)
     if (day !== 0 && day !== 6) {
-      weekdays.push(new Date(current))
+      // CRITICAL FIX: Set time to Noon (12:00:00) 
+      // This prevents the date from shifting to the previous day due to timezone offsets
+      const safeDate = new Date(current)
+      safeDate.setHours(12, 0, 0, 0)
+      weekdays.push(safeDate)
     }
     current.setDate(current.getDate() + 1)
   }
 
-  console.log(`[v0] Found ${weekdays.length} weekdays in month (excluding Sat/Sun)`)
-
   // Shuffle and pick random dates
-  const shuffled = weekdays.sort(() => 0.5 - Math.random())
-  const selected = shuffled.slice(0, Math.min(count, shuffled.length))
+  return weekdays.sort(() => 0.5 - Math.random()).slice(0, count)
+}
 
-  console.log(`[v0] Selected ${selected.length} random weekday dates for tasks`)
-
-  return selected
+const calculateBusinessDueDate = (publishDate, daysBefore = 2) => {
+  const date = new Date(publishDate);
+  // Reset to Noon just in case
+  date.setHours(12, 0, 0, 0); 
+  
+  let count = 0;
+  while (count < daysBefore) {
+    date.setDate(date.getDate() - 1);
+    const day = date.getDay();
+    // Only count this as a "day" if it's a weekday
+    if (day !== 0 && day !== 6) {
+      count++;
+    }
+  }
+  return date;
 }
 
 export const getAllCalendars = async (req, res, next) => {
@@ -257,19 +268,165 @@ export const addScope = async (req, res, next) => {
 export const updateScope = async (req, res, next) => {
   try {
     const { scopeId } = req.params
-    const { quantity, completed } = req.body
+    const { quantity, completed, contentType } = req.body
 
+    // 1. Fetch Scope details
+    const currentScope = await prisma.calendarScope.findUnique({
+      where: { id: scopeId },
+      include: {
+        calendar: { include: { brand: true } }
+      }
+    })
+
+    if (!currentScope) {
+      return res.status(404).json({ message: "Scope not found" })
+    }
+
+    // Determine New Values
+    const newQuantity = quantity !== undefined ? Number.parseInt(quantity) : currentScope.quantity
+    const newContentType = contentType || currentScope.contentType
+    const isTypeChanging = contentType && contentType !== currentScope.contentType
+    
+    // 2. Update the Scope itself
     const updateData = {}
-    if (quantity !== undefined) updateData.quantity = Number.parseInt(quantity)
+    if (quantity !== undefined) updateData.quantity = newQuantity
     if (completed !== undefined) updateData.completed = Number.parseInt(completed)
+    if (isTypeChanging) updateData.contentType = newContentType
 
     const scope = await prisma.calendarScope.update({
       where: { id: scopeId },
       data: updateData,
     })
 
+    // 3. TASK MIGRATION (If Type Changed)
+    if (isTypeChanging) {
+      console.log(`[v0] Migrating tasks from ${currentScope.contentType} to ${newContentType}`)
+      
+      const tasksToMigrate = await prisma.task.findMany({
+        where: {
+          calendarId: currentScope.calendarId,
+          contentType: currentScope.contentType,
+        }
+      })
+
+      const oldTypeString = currentScope.contentType.replace("_", " ")
+      const newTypeString = newContentType.replace("_", " ")
+      const regex = new RegExp(oldTypeString, "gi")
+
+      const updatePromises = tasksToMigrate.map(task => {
+        const newTitle = task.title.replace(regex, (match) => {
+           if (match[0] === match[0].toUpperCase()) {
+             return newTypeString.charAt(0).toUpperCase() + newTypeString.slice(1).toLowerCase();
+           }
+           return newTypeString.toLowerCase();
+        });
+
+        const newDescription = task.description ? task.description.replace(regex, newTypeString.toLowerCase()) : "";
+
+        return prisma.task.update({
+          where: { id: task.id },
+          data: {
+            contentType: newContentType,
+            title: newTitle,
+            description: newDescription
+          }
+        })
+      })
+
+      await prisma.$transaction(updatePromises)
+    }
+
+    // 4. HANDLE QUANTITY CHANGES
+    const quantityDiff = newQuantity - currentScope.quantity
+
+    // CASE A: INCREASE (Add new tasks)
+    if (quantityDiff > 0) {
+      console.log(`[v0] Adding ${quantityDiff} tasks (Unscheduled)...`)
+      // const { year, month } = currentScope.calendar
+      // const monthStart = new Date(year, month - 1, 1)
+      // const monthEnd = new Date(year, month, 0)
+      // const randomDates = getRandomWeekdayDates(monthStart, monthEnd, quantityDiff)
+      
+      const existingCount = await prisma.task.count({
+        where: { calendarId: currentScope.calendarId, contentType: newContentType }
+      })
+
+      for (let i = 0; i < quantityDiff; i++) {
+        await prisma.task.create({
+          data: {
+            title: `${newContentType.replace("_", " ")} #${existingCount + i + 1}`,
+            description: `Create ${newContentType.toLowerCase().replace("_", " ")} for ${currentScope.calendar.brand.name}`,
+            status: "TODO",
+            priority: "MEDIUM",
+            brandId: currentScope.calendar.brandId,
+            calendarId: currentScope.calendarId,
+            contentType: newContentType, 
+            
+            // ✅ CHANGE: No automatic dates
+            publishDate: null, 
+            dueDate: null,
+            
+            createdById: req.user.id,
+          }
+        })
+      }
+
+      // for (let i = 0; i < randomDates.length; i++) {
+      //   const publishDate = randomDates[i]
+      //   const dueDate = calculateBusinessDueDate(publishDate, 2)
+
+      //   await prisma.task.create({
+      //     data: {
+      //       title: `${newContentType.replace("_", " ")} #${existingCount + i + 1}`,
+      //       description: `Create ${newContentType.toLowerCase().replace("_", " ")} for ${currentScope.calendar.brand.name}`,
+      //       status: "TODO",
+      //       priority: "MEDIUM",
+      //       brandId: currentScope.calendar.brandId,
+      //       calendarId: currentScope.calendarId,
+      //       contentType: newContentType, 
+      //       publishDate,
+      //       dueDate, // ✅ No more weekend due dates
+      //       createdById: req.user.id,
+      //     }
+      //   })
+      // }
+    } 
+    
+    // CASE B: DECREASE (Remove excess tasks)
+    else if (quantityDiff < 0) {
+      const countToRemove = Math.abs(quantityDiff)
+      console.log(`[v0] Removing ${countToRemove} excess tasks...`)
+
+      const allTasks = await prisma.task.findMany({
+        where: { 
+          calendarId: currentScope.calendarId,
+          contentType: newContentType 
+        },
+        orderBy: { publishDate: 'desc' }
+      })
+
+      // Sort Priority: TODO first, then IN_PROGRESS, then COMPLETED
+      const sortedTasks = allTasks.sort((a, b) => {
+        const scoreA = a.status === 'TODO' ? 2 : (a.status === 'IN_PROGRESS' ? 1 : 0);
+        const scoreB = b.status === 'TODO' ? 2 : (b.status === 'IN_PROGRESS' ? 1 : 0);
+        return scoreB - scoreA;
+      })
+
+      const tasksToDelete = sortedTasks.slice(0, countToRemove)
+      const idsToDelete = tasksToDelete.map(t => t.id)
+
+      if (idsToDelete.length > 0) {
+        await prisma.task.deleteMany({
+          where: { id: { in: idsToDelete } }
+        })
+      }
+    }
+
     res.json(scope)
   } catch (error) {
+    if (error.code === 'P2002') {
+       return res.status(400).json({ message: "A scope with this content type already exists." })
+    }
     next(error)
   }
 }
@@ -291,7 +448,7 @@ export const deleteScope = async (req, res, next) => {
 export const generateTasks = async (req, res, next) => {
   try {
     const { calendarId } = req.params
-    const { scopes } = req.body // Array of { contentType, quantity }
+    const { scopes } = req.body 
 
     if (!scopes || !Array.isArray(scopes)) {
       return res.status(400).json({ message: "Scopes array is required" })
@@ -302,83 +459,78 @@ export const generateTasks = async (req, res, next) => {
       include: { brand: true, tasks: true },
     })
 
-    if (!calendar) {
-      return res.status(404).json({ message: "Calendar not found" })
-    }
-
-    console.log("[v0] Existing tasks in calendar:", calendar.tasks.length)
+    if (!calendar) return res.status(404).json({ message: "Calendar not found" })
 
     const createdTasks = []
 
     for (const scopeData of scopes) {
       const { contentType, quantity } = scopeData
 
-      // Check how many tasks already exist for this content type in this calendar
       const existingTasksOfType = calendar.tasks.filter((t) => t.contentType === contentType).length
-
-      console.log(`[v0] Content type ${contentType}: ${existingTasksOfType} existing, ${quantity} requested`)
-
-      // Only create tasks for the difference
       const tasksToCreate = Math.max(0, quantity - existingTasksOfType)
 
-      if (tasksToCreate === 0) {
-        console.log(`[v0] Skipping ${contentType} - already has ${existingTasksOfType} tasks`)
-        continue
-      }
+      if (tasksToCreate === 0) continue
 
-      console.log(`[v0] Will create ${tasksToCreate} new ${contentType} tasks`)
-
+      // Update/Create Scope
       await prisma.calendarScope.upsert({
-        where: {
-          calendarId_contentType: {
-            calendarId,
-            contentType,
-          },
-        },
-        create: {
-          calendarId,
-          contentType,
-          quantity: Number.parseInt(quantity),
-        },
-        update: {
-          quantity: Number.parseInt(quantity),
-        },
+        where: { calendarId_contentType: { calendarId, contentType } },
+        create: { calendarId, contentType, quantity: Number.parseInt(quantity) },
+        update: { quantity: Number.parseInt(quantity) },
       })
 
-      const monthStart = new Date(calendar.year, calendar.month - 1, 1)
-      const monthEnd = new Date(calendar.year, calendar.month, 0)
-      const randomDates = getRandomWeekdayDates(monthStart, monthEnd, tasksToCreate)
-
-      for (let i = 0; i < randomDates.length; i++) {
-        const publishDate = randomDates[i]
-        const dayOfWeek = publishDate.getDay()
-
-        if (dayOfWeek === 0 || dayOfWeek === 6) {
-          console.error(`[v0] ERROR: Generated date ${publishDate} is a weekend!`)
-          continue
-        }
-
+      for (let i = 0; i < tasksToCreate; i++) {
+        
         const task = await prisma.task.create({
           data: {
             title: `${contentType.replace("_", " ")} #${existingTasksOfType + i + 1}`,
             description: `Create ${contentType.toLowerCase().replace("_", " ")} for ${calendar.brand.name}`,
-            status: "TODO", // Always start with TODO
+            status: "TODO",
             priority: "MEDIUM",
             brandId: calendar.brandId,
             calendarId: calendar.id,
             contentType,
-            publishDate,
-            dueDate: new Date(publishDate.getTime() - 2 * 24 * 60 * 60 * 1000),
+            
+            // ✅ CHANGE: Set to null (Unscheduled)
+            publishDate: null,
+            dueDate: null, 
+            
             createdById: req.user.id,
           },
-          include: {
-            brand: true,
-          },
+          include: { brand: true },
         })
 
         createdTasks.push(task)
-        console.log(`[v0] Created task #${existingTasksOfType + i + 1} for ${format(publishDate, "EEEE, MMM d")}`)
       }
+
+      // const monthStart = new Date(calendar.year, calendar.month - 1, 1)
+      // const monthEnd = new Date(calendar.year, calendar.month, 0)
+      
+      // const randomDates = getRandomWeekdayDates(monthStart, monthEnd, tasksToCreate)
+
+      // for (let i = 0; i < randomDates.length; i++) {
+      //   const publishDate = randomDates[i]
+        
+      //   // ✅ Use smart due date (no weekends)
+      //   const dueDate = calculateBusinessDueDate(publishDate, 2)
+
+      //   const task = await prisma.task.create({
+      //     data: {
+      //       title: `${contentType.replace("_", " ")} #${existingTasksOfType + i + 1}`,
+      //       description: `Create ${contentType.toLowerCase().replace("_", " ")} for ${calendar.brand.name}`,
+      //       status: "TODO",
+      //       priority: "MEDIUM",
+      //       brandId: calendar.brandId,
+      //       calendarId: calendar.id,
+      //       contentType,
+      //       publishDate,
+      //       dueDate, // ✅ Corrected
+      //       createdById: req.user.id,
+      //     },
+      //     include: { brand: true },
+      //   })
+
+      //   createdTasks.push(task)
+      // }
     }
 
     await prisma.activityLog.create({
@@ -387,14 +539,9 @@ export const generateTasks = async (req, res, next) => {
         entity: "CalendarTasks",
         entityId: calendarId,
         userId: req.user.id,
-        metadata: {
-          tasksCreated: createdTasks.length,
-          scopes,
-        },
+        metadata: { tasksCreated: createdTasks.length, scopes },
       },
     })
-
-    console.log(`[v0] Successfully generated ${createdTasks.length} new tasks (status: TODO)`)
 
     res.status(201).json({
       message: `Generated ${createdTasks.length} new tasks`,
