@@ -1,0 +1,549 @@
+// Prisma Schema for Social Media CRM
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  ACCOUNT_MANAGER
+  WRITER
+  DESIGNER
+  POST_SCHEDULER
+  CLIENT_VIEWER
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+// New enum for social media post status
+enum SocialStatus {
+  DRAFT
+  READY_TO_PUBLISH
+  PUBLISHED
+  SCHEDULED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ContentType {
+  STATIC
+  VIDEO
+  STORY
+  REEL
+  CAROUSEL
+  BLOG_POST
+  OTHER
+}
+
+enum CalendarStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+// 7. ✅ NEW: Enum for notification types (add near top with other enums)
+enum NotificationType {
+  MESSAGE
+  MENTION
+  TASK_ASSIGNED
+  TASK_UPDATED
+  TASK_COMMENT
+  DEADLINE_REMINDER
+  APPROVAL_REQUEST
+  APPROVAL_RESPONSE
+  SYSTEM
+}
+
+enum DeliveryStatus {
+  SENT
+  DELIVERED
+  FAILED
+  PENDING
+}
+
+// 4. ✅ NEW: Enum for media types (add this near the top with other enums)
+enum MediaType {
+  IMAGE
+  VIDEO
+  AUDIO
+  FILE
+  DOCUMENT
+}
+
+// New model for multiple final creatives
+model FinalCreative {
+  id          String   @id @default(cuid())
+  fileName    String
+  fileUrl     String
+  fileType    String
+  fileSize    Int
+  description String?
+  taskId      String
+  uploadedById String
+  deletedAt   DateTime?
+  deletedBy   String?
+  createdAt   DateTime @default(now())
+
+  task       Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation(fields: [uploadedById], references: [id])
+
+  @@index([taskId])
+  @@index([uploadedById])
+  @@index([deletedAt])
+}
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  password          String
+  firstName         String
+  lastName          String
+  avatar            String?      // Added avatar field for user profile pictures
+  mobileNumber      String?      // Added mobile number field for WhatsApp integration
+  whatsAppNumber    String?
+  role              UserRole  @default(CLIENT_VIEWER)
+  isActive          Boolean   @default(true)
+  isOnline          Boolean   @default(false)  // ✅ NEW: Online status
+  lastSeenAt        DateTime  @default(now())  // ✅ NEW: Last activity timestamp
+  deletedAt         DateTime?
+  deletedBy         String?
+  teamId            String?
+  joinDate          DateTime  @default(now())
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Deletion tracking relations
+  deleter           User?          @relation("DeletedUsers", fields: [deletedBy], references: [id])
+  deletedUsers      User[]         @relation("DeletedUsers")
+  deletedBrands     Brand[]        @relation("DeletedBrands")
+  deletedTasks      Task[]         @relation("DeletedTasks")
+
+  // Relations
+  assignedTasks     Task[]           @relation("AssignedTasks")
+  createdTasks      Task[]           @relation("CreatedTasks")
+  comments          Comment[]
+  notifications     Notification[]
+  activityLogs      ActivityLog[]
+  brandAccess       BrandUser[]
+  team              Team?            @relation("TeamMembers", fields: [teamId], references: [id])   
+  
+  ledTeams          Team[]           @relation("TeamLeader")
+  sentMessages      ChatMessage[]    @relation("SentMessages")      // Added chat relations
+  chatRoomMembers   ChatRoomMember[]
+  readReceipts      ReadReceipt[]
+  reactions         MessageReaction[] // Added reactions relation
+  finalCreatives    FinalCreative[]
+
+  @@index([email])
+  @@index([role])
+  @@index([teamId])
+  @@index([deletedAt])
+  @@index([deletedBy])
+  @@index([isOnline])    // ✅ NEW: Index for online users
+  @@index([lastSeenAt])  // ✅ NEW: Index for activity queries
+}
+
+// 9. ✅ Optional: Add typing indicator tracking model for better performance
+model TypingIndicator {
+  id          String    @id @default(cuid())
+  chatRoomId  String
+  userId      String
+  startedAt   DateTime  @default(now())
+  expiresAt   DateTime  // Auto-expire after 5 seconds
+
+  @@unique([chatRoomId, userId])
+  @@index([chatRoomId])
+  @@index([expiresAt])  // For cleanup queries
+}
+
+model Brand {
+  id          String   @id @default(cuid())
+  name        String
+  logo        String?
+  description String?
+  isActive    Boolean  @default(true)
+  deletedAt   DateTime?
+  deletedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  tasks       Task[]
+  users       BrandUser[]
+  calendars   Calendar[]
+
+  deleter     User?     @relation("DeletedBrands", fields: [deletedBy], references: [id], onDelete: SetNull)
+
+
+  @@index([name])
+  @@index([deletedAt])
+  @@index([deletedBy])
+}
+
+model BrandUser {
+  id        String   @id @default(cuid())
+  brandId   String
+  userId    String
+  createdAt DateTime @default(now())
+
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([brandId, userId])
+  @@index([brandId])
+  @@index([userId])
+}
+
+model Task {
+  id              String       @id @default(cuid())
+  title           String
+  description     String?
+  references      String?
+  status          TaskStatus   @default(TODO)
+  priority        TaskPriority @default(MEDIUM)
+  
+  // Dates
+  dueDate         DateTime?    // When task work is due
+  publishDate     DateTime?    // When post should be published (renamed from postingDate)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  deletedAt       DateTime?
+  deletedBy       String?
+  
+  // Social Media Post Status (separate from task status)
+  socialStatus    SocialStatus? @default(DRAFT)
+  
+  // Content fields
+  copyIdea        String?      // Writer's copy/post idea
+  caption         String?      // Final caption for the post
+  
+  // Creative fields
+  creativeRef     String?      // Reference materials (links)
+
+  // ✅ Time tracking fields
+  estimatedTime   Float?       // In hours (e.g., 1.5 for 1.5 hours)
+  actualTime      Float?       // Actual time taken by the tasker
+  timeUnit        String?      @default("hours") // 'hours' or 'minutes'
+  
+  // Other existing fields
+  brandId         String
+  assignedToId    String?
+  createdById     String
+  calendarId      String?
+  contentType     ContentType?
+  textContent     String?      // Keep for backwards compatibility
+  notes           String?
+  
+  // Relations
+  brand            Brand              @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  assignedTo       User?              @relation("AssignedTasks", fields: [assignedToId], references: [id])
+  createdBy        User               @relation("CreatedTasks", fields: [createdById], references: [id])
+  deleter          User?              @relation("DeletedTasks", fields: [deletedBy], references: [id], onDelete: SetNull)
+  calendar         Calendar?          @relation(fields: [calendarId], references: [id], onDelete: SetNull)
+  comments         Comment[]
+  attachments      Attachment[]
+  finalCreatives   FinalCreative[]    // Multiple final creative uploads
+
+  @@index([brandId])
+  @@index([assignedToId])
+  @@index([createdById])
+  @@index([deletedAt])
+  @@index([deletedBy])
+  @@index([status])
+  @@index([dueDate])
+  @@index([publishDate])
+  @@index([socialStatus])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  taskId    String
+  userId    String
+  mentions  String[] @default([])
+  deletedAt DateTime?
+  deletedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([userId])
+  @@index([deletedAt])
+}
+
+model Attachment {
+  id          String   @id @default(cuid())
+  fileName    String
+  fileUrl     String
+  fileType    String
+  fileSize    Int
+  description String?
+  taskId      String
+  deletedAt   DateTime?
+  deletedBy   String?
+  createdAt   DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([deletedAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  metadata  Json?    
+  link      String?
+  imageUrl    String?     // ✅ NEW: For rich notifications with images
+  senderId    String?     // ✅ NEW: Who triggered the notification
+  chatRoomId  String?     // ✅ NEW: Related chat room
+  messageId   String?     // ✅ NEW: Related message
+  sentVia   String[] 
+  createdAt DateTime @default(now())
+  readAt      DateTime?   // ✅ NEW: When notification was read
+  
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([type])         // ✅ NEW: Index for filtering by type
+  @@index([chatRoomId])   // ✅ NEW: Index for chat-related notifications
+  @@index([createdAt])    // ✅ NEW: Index for sorting by date
+}
+
+
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  action    String
+  entity    String
+  entityId  String
+  userId    String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([entity])
+  @@index([createdAt])
+}
+
+model Calendar {
+  id          String         @id @default(cuid())
+  brandId     String
+  month       Int            // 1-12
+  year        Int
+  status      CalendarStatus @default(DRAFT)
+  createdById String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  // Relations
+  brand       Brand          @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  scopes      CalendarScope[]
+  tasks       Task[]
+
+  @@unique([brandId, month, year])
+  @@index([brandId])
+  @@index([month, year])
+}
+
+model CalendarScope {
+  id          String      @id @default(cuid())
+  calendarId  String
+  contentType ContentType
+  quantity    Int
+  completed   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // Relations
+  calendar    Calendar    @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@unique([calendarId, contentType])
+  @@index([calendarId])
+}
+
+model Team {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  leaderId    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  leader      User?    @relation("TeamLeader", fields: [leaderId], references: [id])
+  members     User[]   @relation("TeamMembers")
+
+  @@index([leaderId])
+}
+
+model ChatRoom {
+  id          String           @id @default(cuid())
+  name        String?
+  isGroup     Boolean          @default(false)
+  avatar          String?          // ✅ NEW: Group chat avatar
+  description     String?          // ✅ NEW: Group chat description
+  lastMessageId   String?          // ✅ NEW: Quick access to last message
+  lastMessageAt   DateTime?        // ✅ NEW: When last message was sent
+  createdById     String?          // ✅ NEW: Who created the chat/group
+  isActive        Boolean          @default(true)  // ✅ NEW: Archive support
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  // Relations
+  members     ChatRoomMember[]
+  messages    ChatMessage[]
+
+  @@index([isGroup])
+  @@index([isActive])        // ✅ NEW: Index for active chats
+  @@index([lastMessageAt])   // ✅ NEW: Index for sorting by recent activity
+}
+
+model ChatRoomMember {
+  id          String    @id @default(cuid())
+  chatRoomId  String
+  userId      String
+  joinedAt    DateTime  @default(now())
+  isTyping    Boolean   @default(false)
+  lastSeen    DateTime  @default(now())
+  unreadCount Int       @default(0)
+
+  // Relations
+  chatRoom    ChatRoom  @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([chatRoomId, userId])
+  @@index([chatRoomId])
+  @@index([userId])
+  @@index([unreadCount])
+}
+
+model ChatMessage {
+  id          String    @id @default(cuid())
+  chatRoomId  String
+  senderId    String
+  content     String
+  isEdited    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  editedAt    DateTime? // ✅ NEW: Track when message was edited
+  deletedAt   DateTime? // ✅ NEW: Soft delete support
+  deletedBy   String?   // ✅ NEW: Who deleted the message
+  replyToId   String?   // ✅ NEW: Support for message replies/threads
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  chatRoom    ChatRoom  @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  sender      User      @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  readReceipts ReadReceipt[]
+  media       ChatMedia[]    // Added media relation
+  reactions   MessageReaction[] // Added reactions relation
+
+  @@index([chatRoomId])
+  @@index([senderId])
+  @@index([createdAt])
+  @@index([deletedAt]) 
+  @@index([replyToId])
+}
+
+model ReadReceipt {
+  id          String      @id @default(cuid())
+  messageId   String
+  userId      String
+  readAt      DateTime    @default(now())
+
+  // Relations
+  message     ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+  @@index([userId])
+}
+
+model ChatMedia {
+  id          String      @id @default(cuid())
+  messageId   String
+  type        String      // "IMAGE", "FILE", "AUDIO", "VIDEO"
+  url         String
+  fileName    String?
+  fileSize    Int?
+  mimeType    String?
+  thumbnailUrl String?    // ✅ NEW: For video thumbnails
+  duration    Int?        // ✅ NEW: For audio/video duration in seconds
+  width       Int?        // ✅ NEW: For images/videos
+  height      Int?        // ✅ NEW: For images/videos
+  uploadStatus String     @default("completed") // ✅ NEW: "uploading", "completed", "failed"
+  createdAt   DateTime    @default(now())
+
+  // Relations
+  message     ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([type])         // ✅ NEW: Index for filtering by type
+  @@index([uploadStatus]) // ✅ NEW: Index for upload status queries
+}
+
+model MessageReaction {
+  id          String      @id @default(cuid())
+  messageId   String
+  userId      String
+  emoji       String
+  createdAt   DateTime    @default(now())
+
+  // Relations
+  message     ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+  @@index([userId])
+}
+
+
+
+// 10. ✅ Optional: Message delivery tracking (for future WhatsApp/external integrations)
+model MessageDelivery {
+  id          String    @id @default(cuid())
+  messageId   String
+  userId      String
+  status      DeliveryStatus  @default(SENT)
+  deliveredAt DateTime?
+  failedReason String?
+  createdAt   DateTime  @default(now())
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+  @@index([userId])
+  @@index([status])
+}
