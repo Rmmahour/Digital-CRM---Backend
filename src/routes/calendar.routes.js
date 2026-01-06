@@ -3,6 +3,7 @@ import { authenticate, authorize } from "../middleware/auth.middleware.js"
 import {
   getAllCalendars,
   getCalendarById,
+  getCalendarsByBrand,
   createCalendar,
   updateCalendar,
   deleteCalendar,
@@ -20,7 +21,12 @@ router.use(authenticate)
 
 // Calendar routes
 router.get("/", getAllCalendars)
+router.get("/brand/:brandId", (req, res, next) => {
+  console.log("✅ /brand/:brandId route hit! brandId:", req.params.brandId)
+  next()
+}, getCalendarsByBrand)
 router.get("/:id", getCalendarById)
+
 router.post("/", authorize(["SUPER_ADMIN", "ADMIN", "ACCOUNT_MANAGER"]), createCalendar)
 router.put("/:id", authorize(["SUPER_ADMIN", "ADMIN", "ACCOUNT_MANAGER"]), updateCalendar)
 router.delete("/:id", authorize(["SUPER_ADMIN", "ADMIN"]), deleteCalendar)

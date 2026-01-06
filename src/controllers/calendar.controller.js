@@ -608,3 +608,56 @@ export const updateTaskDate = async (req, res, next) => {
     next(error)
   }
 }
+
+
+// ✅ NEW: Get all calendars for a specific brand
+export const getCalendarsByBrand = async (req, res, next) => {
+  try {
+    const { brandId } = req.params
+
+    const calendars = await prisma.calendar.findMany({
+      where: { brandId },
+      include: {
+        brand: true,
+        scopes: true,
+        tasks: {
+          include: {
+            assignedTo: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                role: true,
+              }
+            },
+            attachments: true,
+            _count: {
+              select: {
+                comments: true,
+                attachments: true,
+              }
+            }
+          },
+          orderBy: {
+            publishDate: 'asc'
+          }
+        }
+      },
+      orderBy: [
+        { year: 'desc' },
+        { month: 'desc' }
+      ]
+    })
+
+    console.log(`[Calendar] Found ${calendars.length} calendars for brand ${brandId}`)
+    
+    // Calculate total tasks across all calendars
+    const totalTasks = calendars.reduce((sum, cal) => sum + (cal.tasks?.length || 0), 0)
+    console.log(`[Calendar] Total tasks across all calendars: ${totalTasks}`)
+
+    res.json(calendars)
+  } catch (error) {
+    console.error('Error fetching brand calendars:', error)
+    next(error)
+  }
+}

@@ -345,7 +345,7 @@ export const updateTask = async (req, res, next) => {
             role: true,
           },
         },
-        createdBy: {  
+        createdBy: {
           select: {
             id: true,
             firstName: true,
@@ -404,8 +404,8 @@ export const deleteTask = async (req, res, next) => {
 
     if (permanent === 'true') {
       if (req.user.role !== 'SUPER_ADMIN') {
-        return res.status(403).json({ 
-          message: 'Only Super Admin can permanently delete tasks' 
+        return res.status(403).json({
+          message: 'Only Super Admin can permanently delete tasks'
         })
       }
 
@@ -654,18 +654,18 @@ export const uploadAttachment = async (req, res, next) => {
     const io = req.app.get("io")
     for (const userId of notifyUsers) {
       await prisma.notification.create({
-  data: {
-    title: "New Attachment",
-    message: `${req.user.firstName} uploaded a file to: ${task.title}`,
-    userId,
-    type: "TASK_UPDATED",  // ✅ ADD THIS
-    sentVia: ["IN_APP"],   // ✅ ADD THIS
-    metadata: {            // ✅ ADD THIS
-      taskId: task.id
-    },
-    link: `/dashboard/tasks/${task.id}`  // ✅ ADD THIS
-  },
-})
+        data: {
+          title: "New Attachment",
+          message: `${req.user.firstName} uploaded a file to: ${task.title}`,
+          userId,
+          type: "TASK_UPDATED",  // ✅ ADD THIS
+          sentVia: ["IN_APP"],   // ✅ ADD THIS
+          metadata: {            // ✅ ADD THIS
+            taskId: task.id
+          },
+          link: `/dashboard/tasks/${task.id}`  // ✅ ADD THIS
+        },
+      })
 
       io.to(`user-${userId}`).emit("new-attachment", {
         taskId,
@@ -784,7 +784,7 @@ export const updateTaskStatus = async (req, res, next) => {
       include: {
         brand: true,
         assignedTo: true,
-      createdBy: {  // ✅ ADD THIS
+        createdBy: {  // ✅ ADD THIS
           select: {
             id: true,
             firstName: true,
@@ -816,7 +816,7 @@ export const updateTaskPriority = async (req, res, next) => {
       include: {
         brand: true,
         assignedTo: true,
-      createdBy: {  // ✅ ADD THIS
+        createdBy: {  // ✅ ADD THIS
           select: {
             id: true,
             firstName: true,
@@ -856,25 +856,30 @@ export const updateTaskDueDate = async (req, res, next) => {
     if (dueDate) {
       const newDueDate = new Date(dueDate)
       const createdAt = new Date(existingTask.createdAt)
-      
+
       // Reset time to start of day for comparison
       newDueDate.setHours(0, 0, 0, 0)
       createdAt.setHours(0, 0, 0, 0)
-      
+
       // Check if dueDate is in the past
       const today = new Date()
       today.setHours(0, 0, 0, 0)
-      
+
       if (newDueDate < today) {
-        return res.status(400).json({ 
-          message: "Due date cannot be in the past" 
+        return res.status(400).json({
+          message: "Due date cannot be in the past"
         })
       }
 
       // Check if dueDate is greater than createdAt
-      if (newDueDate <= createdAt) {
-        return res.status(400).json({ 
-          message: "Due date must be greater than the task creation date" 
+      // if (newDueDate >= createdAt) {
+      //   return res.status(400).json({
+      //     message: "Due date must be greater than the task creation date"
+      //   })
+      // }
+      if (newDueDate < createdAt) {
+        return res.status(400).json({
+          message: "Due date cannot be before the task creation date"
         })
       }
 
@@ -882,10 +887,10 @@ export const updateTaskDueDate = async (req, res, next) => {
       if (existingTask.publishDate) {
         const publishDate = new Date(existingTask.publishDate)
         publishDate.setHours(0, 0, 0, 0)
-        
+
         if (publishDate <= newDueDate) {
-          return res.status(400).json({ 
-            message: "Due date must be less than the publish date" 
+          return res.status(400).json({
+            message: "Due date must be less than the publish date"
           })
         }
       }
@@ -938,8 +943,8 @@ export const updateTaskAssignee = async (req, res, next) => {
       include: {
         brand: true,
         assignedTo: true,
-      
-      createdBy: {  // ✅ ADD THIS
+
+        createdBy: {  // ✅ ADD THIS
           select: {
             id: true,
             firstName: true,
@@ -978,7 +983,7 @@ export const updateCopyIdea = async (req, res, next) => {
     const { copyIdea } = req.body
 
     // Only writers, managers, and admins can edit
-    if (!["SUPER_ADMIN", "ADMIN", "ACCOUNT_MANAGER", "WRITER"].includes(req.user.role)) {
+    if (!["SUPER_ADMIN", "ADMIN", "ACCOUNT_MANAGER", "WRITER","DESIGNER"].includes(req.user.role)) {
       return res.status(403).json({ message: "You don't have permission to edit copy" })
     }
 
@@ -1022,7 +1027,7 @@ export const updateCaption = async (req, res, next) => {
     const { caption } = req.body
 
     // Only writers, managers, and admins can edit
-    if (!["SUPER_ADMIN", "ADMIN", "ACCOUNT_MANAGER", "WRITER"].includes(req.user.role)) {
+    if (!["SUPER_ADMIN", "ADMIN", "ACCOUNT_MANAGER", "WRITER", "DESIGNER"].includes(req.user.role)) {
       return res.status(403).json({ message: "You don't have permission to edit caption" })
     }
 
@@ -1066,7 +1071,7 @@ export const updateCreativeRef = async (req, res, next) => {
     const { creativeRef } = req.body
 
     // Writers, managers, and admins can edit
-    if (!["SUPER_ADMIN", "ADMIN", "ACCOUNT_MANAGER", "WRITER"].includes(req.user.role)) {
+    if (!["SUPER_ADMIN", "ADMIN", "ACCOUNT_MANAGER", "WRITER", "DESIGNER"].includes(req.user.role)) {
       return res.status(403).json({ message: "You don't have permission to edit creative reference" })
     }
 
@@ -1127,44 +1132,44 @@ export const updatePublishDate = async (req, res, next) => {
     // Validate publishDate
     if (publishDate) {
       const newPublishDate = new Date(publishDate)
-      
+
       // Reset time to start of day for comparison
       newPublishDate.setHours(0, 0, 0, 0)
-      
+
       // Check if publishDate is in the past
       const today = new Date()
       today.setHours(0, 0, 0, 0)
-      
+
       if (newPublishDate < today) {
-        return res.status(400).json({ 
-          message: "Publish date cannot be in the past" 
+        return res.status(400).json({
+          message: "Publish date cannot be in the past"
         })
       }
 
       // Check if dueDate exists
       if (!existingTask.dueDate) {
-        return res.status(400).json({ 
-          message: "Cannot set publish date without a due date. Please set due date first." 
+        return res.status(400).json({
+          message: "Cannot set publish date without a due date. Please set due date first."
         })
       }
 
       // Check if publishDate is greater than dueDate
       const dueDate = new Date(existingTask.dueDate)
       dueDate.setHours(0, 0, 0, 0)
-      
+
       if (newPublishDate <= dueDate) {
-        return res.status(400).json({ 
-          message: "Publish date must be greater than the due date" 
+        return res.status(400).json({
+          message: "Publish date must be greater than the due date"
         })
       }
 
       // Check if publishDate is greater than createdAt
       const createdAt = new Date(existingTask.createdAt)
       createdAt.setHours(0, 0, 0, 0)
-      
+
       if (newPublishDate <= createdAt) {
-        return res.status(400).json({ 
-          message: "Publish date must be greater than the task creation date" 
+        return res.status(400).json({
+          message: "Publish date must be greater than the task creation date"
         })
       }
     }
@@ -1498,8 +1503,8 @@ export const updateEstimatedTime = async (req, res, next) => {
 
     // Only admins and managers can update estimated time
     if (!["SUPER_ADMIN", "ADMIN", "ACCOUNT_MANAGER"].includes(req.user.role)) {
-      return res.status(403).json({ 
-        message: "Only admins and managers can update estimated time" 
+      return res.status(403).json({
+        message: "Only admins and managers can update estimated time"
       })
     }
 
@@ -1549,8 +1554,8 @@ export const updateActualTime = async (req, res, next) => {
 
     // Only assigned user can update actual time
     if (task.assignedToId !== req.user.id && !["SUPER_ADMIN", "ADMIN", "ACCOUNT_MANAGER"].includes(req.user.role)) {
-      return res.status(403).json({ 
-        message: "Only assigned user can update actual time" 
+      return res.status(403).json({
+        message: "Only assigned user can update actual time"
       })
     }
 
